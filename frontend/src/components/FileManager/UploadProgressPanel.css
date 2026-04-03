@@ -1,0 +1,107 @@
+.fm-upload-progress {
+  position: absolute;
+  bottom: var(--space-6);
+  right: var(--space-6);
+  width: 320px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 1000;
+  animation: panelSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fm-upload-progress-header {
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.fm-upload-progress-title {
+  font-family: var(--font-family);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fm-upload-progress-close {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.fm-upload-progress-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.fm-upload-progress-bar-container {
+  height: 4px;
+  background: var(--bg-hover);
+  width: 100%;
+}
+
+.fm-upload-progress-bar {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width 0.2s linear;
+}
+
+.fm-upload-progress.done .fm-upload-progress-bar {
+  background: var(--success);
+}
+
+.fm-upload-progress.error .fm-upload-progress-bar {
+  background: var(--error);
+}
+
+.fm-upload-progress-files {
+  padding: var(--space-2) var(--space-4);
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.fm-upload-progress-file {
+  display: flex;
+  justify-content: space-between;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.fm-upload-progress-file-name {
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-upload-progress-file-size {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  margin-left: var(--space-2);
+}
+
+.fm-upload-progress-more {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding-top: var(--space-1);
+}

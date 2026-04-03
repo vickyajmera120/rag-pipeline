@@ -1,0 +1,20 @@
+.fm-card.folder {
+  /* Common fm-card styles inherited */
+}
+
+.fm-card-icon.folder-icon {
+  color: #fbbf24;
+}
+
+.fm-card-icon.folder-icon svg {
+  filter: drop-shadow(0 2px 4px rgba(251, 191, 36, 0.3));
+}
+
+.fm-items.list .fm-card-icon.folder-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.fm-card.folder:hover .folder-icon {
+  transform: scale(1.1);
+}

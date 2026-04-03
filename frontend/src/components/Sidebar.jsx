@@ -5,6 +5,7 @@ export default function Sidebar({
   activeConversationId,
   onNewChat,
   onSelectConversation,
+  onDeleteConversation,
   stats,
 }) {
   return (
@@ -34,10 +35,22 @@ export default function Sidebar({
               }`}
               onClick={() => onSelectConversation(conv.conversation_id)}
             >
-              <div className="conversation-item-title">{conv.title}</div>
-              <div className="conversation-item-meta">
-                {conv.message_count} messages
+              <div className="conversation-item-content">
+                <div className="conversation-item-title">{conv.title}</div>
+                <div className="conversation-item-meta">
+                  {conv.message_count} messages
+                </div>
               </div>
+              <button
+                className="conversation-item-delete"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onDeleteConversation) onDeleteConversation(conv.conversation_id);
+                }}
+                title="Delete Conversation"
+              >
+                ✕
+              </button>
             </div>
           ))
         )}

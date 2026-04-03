@@ -1,0 +1,57 @@
+/* ── Context Menu ── */
+.fm-context-menu {
+  position: fixed;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-lg);
+  padding: var(--space-2);
+  min-width: 220px;
+  box-shadow: var(--shadow-xl);
+  z-index: 1000;
+  animation: scaleIn 0.1s ease-out backwards;
+  transform-origin: top left;
+}
+
+@keyframes scaleIn {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.fm-context-menu-item {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+  transition: all var(--transition-fast);
+}
+
+.fm-context-menu-item:hover {
+  background: var(--bg-surface);
+}
+
+.fm-context-menu-item.danger {
+  color: var(--error);
+}
+
+.fm-context-menu-item.danger:hover {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.fm-context-menu-icon {
+  font-size: 1rem;
+}
+
+.fm-context-menu-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-1) 0;
+}

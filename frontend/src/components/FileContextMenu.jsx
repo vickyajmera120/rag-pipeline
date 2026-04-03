@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import './FileContextMenu.css';
 
 export default function FileContextMenu({ x, y, items, onClose }) {
   const menuRef = useRef(null);

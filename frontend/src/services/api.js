@@ -376,6 +376,13 @@ export async function getConversations() {
   return res.json();
 }
 
+export async function getConversation(conversationId) {
+  const res = await fetch(`${API_BASE}/conversations/${conversationId}`);
+  if (!res.ok) throw new Error('Failed to get conversation');
+  return res.json();
+}
+
+
 export async function deleteConversation(conversationId) {
   const res = await fetch(`${API_BASE}/conversations/${conversationId}`, {
     method: 'DELETE',

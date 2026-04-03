@@ -1,0 +1,20 @@
+.fm-card.file {
+  /* Inherits from .fm-card which will be in FileGrid.css or FileManager.css */
+}
+
+.file-icon {
+  background: rgba(99, 102, 241, 0.1);
+  color: #6366f1;
+}
+
+.fm-card.file:hover .file-icon {
+  transform: scale(1.1) rotate(-5deg);
+}
+
+.fm-card-icon-emoji {
+  font-size: 2rem;
+}
+
+.fm-items.list .fm-card-icon-emoji {
+  font-size: 1.4rem;
+}

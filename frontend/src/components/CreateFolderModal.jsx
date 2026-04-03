@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import './CreateFolderModal.css';
 
 export default function CreateFolderModal({ onClose, onCreate, existingNames = [] }) {
   const [name, setName] = useState('');

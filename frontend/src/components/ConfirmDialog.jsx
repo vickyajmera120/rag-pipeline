@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react';
+import './ConfirmDialog.css';
 
 export default function ConfirmDialog({ title, message, items, confirmLabel, confirmDanger, onConfirm, onCancel }) {
   const confirmBtnRef = useRef(null);

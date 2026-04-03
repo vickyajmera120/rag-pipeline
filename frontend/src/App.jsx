@@ -5,7 +5,7 @@ import ChatInterface from './components/ChatInterface';
 import FileManager from './components/FileManager';
 import UploadPanel from './components/UploadPanel';
 import StatusIndicator from './components/StatusIndicator';
-import { getIngestionStatus, getSystemStats, getConversations } from './services/api';
+import { getIngestionStatus, getSystemStats, getConversations, getConversation, deleteConversation } from './services/api';
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat');
@@ -100,8 +100,28 @@ export default function App() {
     setScopeLabel('');
   };
 
-  const handleSelectConversation = (convId) => {
-    setActiveConversationId(convId);
+  const handleSelectConversation = async (convId) => {
+    try {
+      const data = await getConversation(convId);
+      setMessages(data.messages || []);
+      setActiveConversationId(convId);
+      // Reset scope if loading a new conversation since context changes
+      // We assume historical file_ids aren't stored on the frontend for now, or would need backend help
+    } catch (e) {
+      console.error('Failed to load conversation', e);
+    }
+  };
+
+  const handleDeleteConversation = async (convId) => {
+    try {
+      await deleteConversation(convId);
+      if (activeConversationId === convId) {
+        handleNewChat();
+      }
+      refreshConversations();
+    } catch (e) {
+      console.error('Failed to delete conversation', e);
+    }
   };
 
   const handleConversationUpdate = (convId) => {
@@ -139,6 +159,7 @@ export default function App() {
             activeConversationId={activeConversationId}
             onNewChat={handleNewChat}
             onSelectConversation={handleSelectConversation}
+            onDeleteConversation={handleDeleteConversation}
             stats={stats}
           />
 
