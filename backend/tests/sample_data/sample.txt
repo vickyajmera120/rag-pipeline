@@ -1,0 +1,54 @@
+MACHINE LEARNING FUNDAMENTALS
+
+Machine learning is a subset of artificial intelligence that focuses on building systems that learn from data. Rather than being explicitly programmed to perform a task, these systems use algorithms to identify patterns and make decisions.
+
+SUPERVISED LEARNING
+
+In supervised learning, the algorithm is trained on labeled data. Each training example consists of an input and the corresponding desired output. The goal is to learn a mapping function from inputs to outputs.
+
+Common supervised learning algorithms include:
+- Linear Regression: Predicts continuous values based on input features.
+- Logistic Regression: Used for binary classification problems.
+- Decision Trees: Tree-like models of decisions and their possible consequences.
+- Random Forests: Ensemble of decision trees that improves prediction accuracy.
+- Neural Networks: Multi-layer networks that can learn complex patterns.
+
+UNSUPERVISED LEARNING
+
+Unsupervised learning works with unlabeled data. The algorithm tries to find hidden patterns or structures in the data without any guidance.
+
+Key unsupervised learning techniques:
+- Clustering (K-Means, DBSCAN): Groups similar data points together.
+- Dimensionality Reduction (PCA, t-SNE): Reduces the number of features while preserving important information.
+- Association Rules: Discovers interesting relationships between variables.
+- Autoencoders: Neural networks that learn efficient data representations.
+
+DEEP LEARNING
+
+Deep learning is a subset of machine learning that uses neural networks with many layers (hence "deep"). These networks can learn hierarchical representations of data.
+
+Key architectures in deep learning:
+- Convolutional Neural Networks (CNNs): Primarily used for image processing and computer vision tasks.
+- Recurrent Neural Networks (RNNs): Designed for sequential data like time series and text.
+- Transformers: Attention-based architecture that has revolutionized NLP. Models like GPT and BERT are based on transformers.
+- Generative Adversarial Networks (GANs): Consist of two networks that compete to generate realistic data.
+
+MODEL EVALUATION
+
+Evaluating machine learning models is crucial for understanding their performance:
+- Accuracy: The proportion of correct predictions.
+- Precision: The proportion of positive predictions that are actually positive.
+- Recall: The proportion of actual positives that were correctly identified.
+- F1 Score: The harmonic mean of precision and recall.
+- AUC-ROC: Area under the receiver operating characteristic curve.
+
+OVERFITTING AND REGULARIZATION
+
+Overfitting occurs when a model learns the training data too well, including noise, and performs poorly on new data.
+
+Techniques to prevent overfitting:
+- Cross-validation: Using different subsets of data for training and testing.
+- Regularization (L1, L2): Adding a penalty term to the loss function.
+- Dropout: Randomly deactivating neurons during training.
+- Early Stopping: Stopping training when validation performance stops improving.
+- Data Augmentation: Creating new training examples from existing data.
