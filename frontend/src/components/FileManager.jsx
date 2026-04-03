@@ -153,7 +153,9 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
   const getBreadcrumbPath = () => {
     const path = [];
     let id = currentFolderId;
-    while (id) {
+    const visited = new Set();
+    while (id && !visited.has(id)) {
+      visited.add(id);
       const folder = folders.find((f) => f.id === id);
       if (!folder) break;
       path.unshift(folder);
@@ -171,14 +173,17 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
 
   // Get all file IDs recursively in a folder
   const getRecursiveFileIds = useCallback(
-    (folderId) => {
+    (folderId, visited = new Set()) => {
+      if (visited.has(folderId)) return [];
+      visited.add(folderId);
+
       const ids = [];
       for (const [fileId, fId] of Object.entries(fileAssignments)) {
         if (fId === folderId) ids.push(fileId);
       }
       const subFolders = folders.filter((f) => f.parentId === folderId);
       for (const sub of subFolders) {
-        ids.push(...getRecursiveFileIds(sub.id));
+        ids.push(...getRecursiveFileIds(sub.id, visited));
       }
       return ids;
     },
@@ -607,8 +612,24 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     e.preventDefault();
     e.stopPropagation();
     if (!dragItem) return;
-    // Don't allow dropping on self
-    if (dragItem.type === 'folder' && dragItem.id === folderId) return;
+    
+    // Check for circular reference: prevent dropping a folder into itself or its descendant
+    if (dragItem.type === 'folder') {
+      let isDescendant = false;
+      let currentId = folderId;
+      const visited = new Set();
+      while (currentId && !visited.has(currentId)) {
+        visited.add(currentId);
+        if (currentId === dragItem.id) {
+          isDescendant = true;
+          break;
+        }
+        const parentFolder = folders.find(f => f.id === currentId);
+        currentId = parentFolder ? parentFolder.parentId : null;
+      }
+      if (isDescendant) return;
+    }
+
     e.dataTransfer.dropEffect = 'move';
     setDragOverTarget(folderId);
   };
@@ -633,7 +654,20 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
       // Move all selected items
       for (const key of selectedItems) {
         if (key.startsWith('folder:')) {
-          itemsToMove.push({ id: key.replace('folder:', ''), type: 'folder' });
+          const fId = key.replace('folder:', '');
+          // Double check we are not creating a cycle
+          let isDescendant = false;
+          let currentId = targetFolderId;
+          const visited = new Set();
+          while (currentId && !visited.has(currentId)) {
+            visited.add(currentId);
+            if (currentId === fId) { isDescendant = true; break; }
+            const pFolder = folders.find(f => f.id === currentId);
+            currentId = pFolder ? pFolder.parentId : null;
+          }
+          if (!isDescendant) {
+            itemsToMove.push({ id: fId, type: 'folder' });
+          }
         } else {
           itemsToMove.push({ id: key, type: 'file' });
         }

@@ -1161,6 +1161,8 @@ a {
   background: var(--bg-glass-strong);
   backdrop-filter: blur(12px);
   flex-shrink: 0;
+  position: relative;
+  z-index: 50;
 }
 
 .fm-header-left {
