@@ -249,11 +249,21 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
   };
 
   const handleAskAboutCurrentFolder = () => {
-    if (!currentFolderId) return;
-    const fileIds = getRecursiveFileIds(currentFolderId);
-    if (fileIds.length > 0) {
+    let fileIds;
+    let label;
+
+    if (currentFolderId) {
+      fileIds = getRecursiveFileIds(currentFolderId);
       const current = folders.find((f) => f.id === currentFolderId);
-      onScopeChange(fileIds, current?.name || 'Folder');
+      label = current?.name || 'Folder';
+    } else {
+      // Root: includes all files in the system
+      fileIds = files.map((f) => f.file_id);
+      label = 'All Files';
+    }
+
+    if (fileIds.length > 0) {
+      onScopeChange(fileIds, label);
       onSwitchToChat();
     }
   };
@@ -411,7 +421,8 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
       }
     }
 
-    await persistFoldersLocal(folders, newAssignments);
+    const updatedFolders = folders.filter(f => !itemsToDelete.includes(`folder:${f.id}`));
+    await persistFoldersLocal(updatedFolders, newAssignments);
     setDeleteConfirm(null);
     setSelectedItems(new Set());
     refreshData();
@@ -449,7 +460,8 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
 
   const handleCreateFolder = async (name) => {
     try {
-      await createFolderApi(name, currentFolderId);
+      const id = Date.now().toString() + Math.random().toString(36).substring(2, 7);
+      await createFolderApi(id, name, currentFolderId);
       refreshData();
     } catch (e) {
       console.error('Failed to create folder', e);
@@ -693,12 +705,12 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             <div>
               <p>Are you sure you want to delete <strong>{deleteConfirm.name}</strong>?</p>
               {deleteConfirm.isBatch && <p style={{ fontSize: '12px', marginTop: '4px' }}>{deleteConfirm.batchDetails}</p>}
-              {deleteConfirm.isFolder && <p style={{ color: 'var(--error)', marginTop: '8px' }}>⚠️ This will also delete {deleteConfirm.fileCount} file(s) and any folders inside.</p>}
+              {deleteConfirm.isFolder && <p style={{ color: 'var(--error)', marginTop: '8px' }}>⚠️ This will permanently delete this folder and all its contents (files and subfolders).</p>}
               <p style={{ marginTop: '8px', opacity: 0.8 }}>This action cannot be undone.</p>
             </div>
           }
-          confirmText="Delete"
-          isDanger={true}
+          confirmLabel="Delete"
+          confirmDanger={true}
           onConfirm={executeDelete}
           onCancel={() => setDeleteConfirm(null)}
         />

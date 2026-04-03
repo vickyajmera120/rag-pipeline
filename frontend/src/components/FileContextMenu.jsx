@@ -40,26 +40,26 @@ export default function FileContextMenu({ x, y, items, onClose }) {
 
   return (
     <div
-      className="context-menu"
+      className="fm-context-menu"
       ref={menuRef}
       style={{ left: x, top: y }}
       id="file-context-menu"
     >
       {items.map((item, idx) =>
         item.divider ? (
-          <div key={idx} className="context-menu-divider" />
+          <div key={idx} className="fm-context-menu-divider" />
         ) : (
           <button
             key={idx}
-            className={`context-menu-item ${item.danger ? 'danger' : ''}`}
+            className={`fm-context-menu-item ${item.danger ? 'danger' : ''}`}
             onClick={() => {
               item.onClick();
               onClose();
             }}
             disabled={item.disabled}
           >
-            <span className="context-menu-icon">{item.icon}</span>
-            <span className="context-menu-label">{item.label}</span>
+            <span className="fm-context-menu-icon">{item.icon}</span>
+            <span className="fm-context-menu-label">{item.label}</span>
           </button>
         )
       )}

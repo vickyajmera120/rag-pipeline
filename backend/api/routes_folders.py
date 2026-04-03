@@ -204,9 +204,8 @@ async def rename_folder(body: dict):
 
 @router.post("/delete")
 async def delete_folder(body: dict):
-    """Delete a folder — remove metadata and clean up empty directory.
+    """Delete a folder recursively — remove all children (folders and files).
 
-    Files are reassigned to parent before deletion.
     Body:
         id: Folder ID
     """
@@ -216,44 +215,67 @@ async def delete_folder(body: dict):
 
     data = _read_folders()
     folders = data.get("folders", [])
+    file_assignments = data.get("fileAssignments", {})
 
-    # Get folder path before removal
-    folder_path = _resolve_folder_path(folder_id, folders)
-    disk_path = settings.UPLOAD_DIR / folder_path
+    # Helper to find all nested folder IDs
+    def get_all_child_folder_ids(fid, all_flds):
+        child_ids = [fid]
+        direct_children = [f["id"] for f in all_flds if f.get("parentId") == fid]
+        for cid in direct_children:
+            child_ids.extend(get_all_child_folder_ids(cid, all_flds))
+        return child_ids
 
-    # Find the folder to get parentId
+    # Find the folder to get path info
     folder = next((f for f in folders if f["id"] == folder_id), None)
     if not folder:
         raise HTTPException(status_code=404, detail="Folder not found")
 
-    parent_id = folder.get("parentId")
+    # Resolve disk path before metadata is cleared
+    folder_path = _resolve_folder_path(folder_id, folders)
+    disk_path = settings.UPLOAD_DIR / folder_path
 
-    # Reassign files to parent
-    file_assignments = data.get("fileAssignments", {})
-    for file_id, fid in list(file_assignments.items()):
-        if fid == folder_id:
-            file_assignments[file_id] = parent_id
+    # Identify all folders to be removed
+    ids_to_delete = get_all_child_folder_ids(folder_id, folders)
+    ids_set = set(ids_to_delete)
 
-    # Move subfolders to parent
-    data["folders"] = [
-        {**f, "parentId": parent_id} if f.get("parentId") == folder_id else f
-        for f in folders
-        if f["id"] != folder_id
+    # Identify all files assigned to these folders
+    files_to_delete = [
+        file_id for file_id, fid in file_assignments.items()
+        if fid in ids_set
     ]
+
+    # Delete files from ingestion service (disk + indices)
+    try:
+        from main import app_state
+        ingestion_service = app_state.get("ingestion_service")
+        if ingestion_service:
+            for file_id in files_to_delete:
+                await ingestion_service.delete_file(file_id)
+        else:
+            logger.warning("IngestionService not found in app_state; disk files might remain.")
+    except Exception as e:
+        logger.error(f"Error during recursive file deletion: {e}")
+
+    # Remove folders from metadata
+    data["folders"] = [f for f in folders if f["id"] not in ids_set]
+    
+    # Remove file assignments for these files
+    for file_id in files_to_delete:
+        if file_id in file_assignments:
+            del file_assignments[file_id]
+            
     data["fileAssignments"] = file_assignments
     _write_folders(data)
 
-    # Clean up empty directory on disk
+    # Deep clean the directory on disk if it still exists
     if disk_path.exists() and disk_path.is_dir():
         try:
-            # Only remove if empty (files should have been moved)
-            if not any(disk_path.iterdir()):
-                disk_path.rmdir()
-                logger.info(f"Removed empty folder from disk: {disk_path}")
+            shutil.rmtree(disk_path)
+            logger.info(f"Recursively removed directory from disk: {disk_path}")
         except Exception as e:
-            logger.error(f"Error removing folder from disk: {e}")
+            logger.error(f"Error removing directory from disk: {e}")
 
-    return {"message": "Folder deleted", "id": folder_id}
+    return {"message": "Folder and all contents deleted", "id": folder_id, "deleted_files_count": len(files_to_delete)}
 
 
 @router.get("/resolve-path/{folder_id}")

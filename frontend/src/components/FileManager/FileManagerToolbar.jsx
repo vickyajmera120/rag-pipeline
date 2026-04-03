@@ -53,15 +53,13 @@ export default function FileManagerToolbar({
       </div>
 
       <div className="fm-toolbar-right">
-        {currentFolderId && (
-          <button
-            className="fm-btn scope-btn"
-            onClick={handleAskAboutCurrentFolder}
-            title="Ask questions about files in this folder"
-          >
-            💬 Ask
-          </button>
-        )}
+        <button
+          className="fm-btn scope-btn"
+          onClick={handleAskAboutCurrentFolder}
+          title="Ask questions about files in this folder"
+        >
+          💬 Ask
+        </button>
 
         <div className="fm-search">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
