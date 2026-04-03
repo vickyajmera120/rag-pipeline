@@ -1,6 +1,7 @@
 """FastAPI application entry point.
 
 Initializes all services and registers API routes.
+# Storage cleanup reload trigger.
 """
 
 import logging

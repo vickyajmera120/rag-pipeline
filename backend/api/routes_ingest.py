@@ -33,10 +33,10 @@ async def _run_ingestion_files(ingestion_service, files):
         logger.error(f"Background ingestion error: {e}")
 
 
-async def _run_ingestion_zip(ingestion_service, zip_path):
+async def _run_ingestion_zip(ingestion_service, zip_path, parent_folder_id=None):
     """Background task to run ZIP ingestion."""
     try:
-        await ingestion_service.ingest_zip(zip_path)
+        await ingestion_service.ingest_zip(zip_path, parent_folder_id)
     except Exception as e:
         logger.error(f"Background ZIP ingestion error: {e}")
 
@@ -139,8 +139,12 @@ async def upload_zip(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error saving ZIP: {e}")
 
+    # Resolve parent folder ID
+    from api.routes_folders import get_folder_id_by_path
+    parent_id = get_folder_id_by_path(folder_path)
+
     # Run ingestion in background
-    background_tasks.add_task(_run_ingestion_zip, ingestion_service, str(zip_path))
+    background_tasks.add_task(_run_ingestion_zip, ingestion_service, str(zip_path), parent_id)
 
     return UploadResponse(
         message=f"Processing ZIP: {file.filename}",

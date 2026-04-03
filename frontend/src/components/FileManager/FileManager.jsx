@@ -276,7 +276,7 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     }
   };
 
-  const doUpload = async (uploadThunk, filesToUpload, defaultName = 'files') => {
+  const doUpload = async (uploadThunk, filesToUpload, defaultName = 'files', isZip = false) => {
     setUploading(true);
     setUploadProgress({
       files: Array.from(filesToUpload).map(f => ({ name: f.name, size: f.size })),
@@ -294,24 +294,41 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
         } catch { /* root */ }
       }
 
-      const res = await uploadThunk(filesToUpload, relativePath, (percent) => {
-        setUploadProgress(prev => prev ? { ...prev, percent } : null);
+      const res = await uploadThunk(filesToUpload, relativePath, (progress) => {
+        setUploadProgress(prev => prev ? { ...prev, percent: progress.percent || progress } : null);
       });
 
-      const newIds = res.files ? res.files.map((f) => f.file_id) : res.file_ids || [];
-      const newAssignments = { ...fileAssignments };
-      newIds.forEach((id) => {
-        if (currentFolderId) newAssignments[id] = currentFolderId;
-      });
+      if (!isZip) {
+        // For regular file uploads, assign to current folder on the client
+        const newIds = res.files ? res.files.map((f) => f.file_id) : res.file_ids || [];
+        const newAssignments = { ...fileAssignments };
+        newIds.forEach((id) => {
+          if (currentFolderId) newAssignments[id] = currentFolderId;
+        });
 
-      setFileAssignments(newAssignments);
-      await persistFoldersLocal(folders, newAssignments);
+        setFileAssignments(newAssignments);
+        await persistFoldersLocal(folders, newAssignments);
+      }
+      // For ZIP uploads: backend handles folder creation & file assignments.
+      // We just need to refresh after the background task finishes.
 
       setUploadProgress(prev => prev ? { ...prev, percent: 100, status: 'done', message: 'Upload complete' } : null);
       setTimeout(() => setUploadProgress(null), 3000);
       refreshData();
+
+      // For ZIPs, do an extra delayed refresh to pick up background results
+      if (isZip) {
+        setTimeout(() => refreshData(), 3000);
+        setTimeout(() => refreshData(), 6000);
+      }
     } catch (error) {
-      setUploadProgress(prev => prev ? { ...prev, status: 'error', message: error.message } : null);
+      console.error('Upload error:', error);
+      let errMsg = 'Upload failed';
+      if (typeof error === 'string') errMsg = error;
+      else if (error instanceof Error) errMsg = error.message;
+      else if (error?.detail) errMsg = typeof error.detail === 'string' ? error.detail : JSON.stringify(error.detail);
+      else if (error?.message && typeof error.message === 'string') errMsg = error.message;
+      setUploadProgress(prev => prev ? { ...prev, status: 'error', message: errMsg } : null);
     } finally {
       setUploading(false);
     }
@@ -335,7 +352,8 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     doUpload(
       (files, folderPath, onProgress) => uploadZipWithProgress(file, folderPath, onProgress),
       [file],
-      file.name
+      file.name,
+      true  // isZip = true
     );
     e.target.value = '';
     setShowUploadMenu(false);
@@ -421,7 +439,29 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
       }
     }
 
-    const updatedFolders = folders.filter(f => !itemsToDelete.includes(`folder:${f.id}`));
+    // Collect all folder IDs being deleted (including all descendants)
+    const allFolderIdsToRemove = new Set();
+    for (const key of itemsToDelete) {
+      if (key.startsWith('folder:')) {
+        const id = key.replace('folder:', '');
+        // Recursively collect this folder and all its descendants
+        const collectDescendants = (folderId) => {
+          allFolderIdsToRemove.add(folderId);
+          folders.filter(f => f.parentId === folderId).forEach(child => collectDescendants(child.id));
+        };
+        collectDescendants(id);
+      }
+    }
+
+    const updatedFolders = folders.filter(f => !allFolderIdsToRemove.has(f.id));
+    
+    // Also clean up file assignments for files in deleted folders
+    for (const [fileId, folderId] of Object.entries(newAssignments)) {
+      if (allFolderIdsToRemove.has(folderId)) {
+        delete newAssignments[fileId];
+      }
+    }
+    
     await persistFoldersLocal(updatedFolders, newAssignments);
     setDeleteConfirm(null);
     setSelectedItems(new Set());

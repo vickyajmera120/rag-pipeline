@@ -117,11 +117,17 @@ class IngestionService:
 
         return results
 
-    async def ingest_zip(self, zip_path: str) -> list[IngestedFile]:
-        """Extract and ingest a ZIP file.
+    async def ingest_zip(self, zip_path: str, parent_folder_id: Optional[str] = None) -> list[IngestedFile]:
+        """Extract and ingest a ZIP file, maintaining folder hierarchy.
+
+        The ZIP is extracted into a subdirectory named after the ZIP file stem.
+        E.g. uploading 'docs.zip' into 'Folder1' creates:
+          Folder1/docs/file1.txt
+          Folder1/docs/sub/file2.txt
 
         Args:
             zip_path: Path to the ZIP file.
+            parent_folder_id: Optional ID of the virtual folder the ZIP was uploaded into.
 
         Returns:
             List of IngestedFile tracking objects.
@@ -130,20 +136,66 @@ class IngestionService:
         if not zipfile.is_zipfile(str(path)):
             raise ValueError(f"Not a valid ZIP file: {zip_path}")
 
-        # Extract to upload directory
-        extract_dir = settings.UPLOAD_DIR / path.stem
+        # Create a subdirectory named after the ZIP (preserves ZIP name in hierarchy)
+        extract_dir = path.parent / path.stem
         extract_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Extracting ZIP: {path.name} → {extract_dir}")
 
         with zipfile.ZipFile(str(path), "r") as zf:
+            namelist = zf.namelist()
             zf.extractall(str(extract_dir))
 
-        # Find all supported files recursively
-        file_paths = self._find_supported_files(extract_dir)
-        logger.info(f"Found {len(file_paths)} supported files in ZIP")
+        # Clean up the ZIP file itself
+        try:
+            path.unlink()
+        except Exception:
+            pass
 
-        return await self.ingest_files(file_paths)
+        # 1. Create wrapper virtual folder for the ZIP name + sync internal structure
+        try:
+            from api.routes_folders import sync_zip_metadata, update_file_assignments
+            path_to_id = sync_zip_metadata(namelist, extract_dir, parent_folder_id)
+        except Exception as e:
+            logger.error(f"Failed to sync folder metadata for ZIP: {e}")
+            path_to_id = {}
+
+        # 2. Find and register only the files from this ZIP
+        file_paths = []
+        for name in namelist:
+            extracted_path = (extract_dir / name).absolute()
+            if extracted_path.is_file() and extracted_path.suffix.lower() in settings.SUPPORTED_EXTENSIONS:
+                file_paths.append(str(extracted_path))
+
+        logger.info(f"Found {len(file_paths)} supported files in ZIP hierarchy")
+
+        ingested_files = self.register_files(file_paths)
+
+        # 3. Update file assignments in metadata
+        if ingested_files and path_to_id:
+            new_assignments = {}
+            for f in ingested_files:
+                file_abs_path = Path(f.file_path).absolute()
+                parent_path_str = file_abs_path.parent.as_posix()
+
+                folder_id = path_to_id.get(parent_path_str)
+                if folder_id:
+                    new_assignments[f.file_id] = folder_id
+                else:
+                    logger.warning(f"No folder ID mapping for {parent_path_str}")
+
+            if new_assignments:
+                try:
+                    update_file_assignments(new_assignments)
+                    logger.info(f"Successfully assigned {len(new_assignments)} files to folders.")
+                except Exception as e:
+                    logger.error(f"Failed to update file assignments for ZIP: {e}")
+
+        # 4. Ingest files (parse, chunk, embed)
+        if ingested_files:
+            await self.process_ingested_files(ingested_files)
+
+        return ingested_files
 
     async def ingest_directory(self, dir_path: str) -> list[IngestedFile]:
         """Recursively ingest all supported files in a directory.
