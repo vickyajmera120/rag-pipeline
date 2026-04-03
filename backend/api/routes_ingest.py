@@ -1,12 +1,13 @@
 """Ingestion API routes.
 
-Handles file upload, ZIP upload, and folder upload endpoints.
+Handles file upload, ZIP upload, folder upload, file move, and download endpoints.
 """
 
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import FileResponse
 
 from config import get_settings
 from models.api_models import UploadResponse, IngestionStatusResponse
@@ -35,7 +36,6 @@ async def _run_ingestion_files(ingestion_service, files):
 async def _run_ingestion_zip(ingestion_service, zip_path):
     """Background task to run ZIP ingestion."""
     try:
-        # ZIP extraction returns list of IngestedFiles
         await ingestion_service.ingest_zip(zip_path)
     except Exception as e:
         logger.error(f"Background ZIP ingestion error: {e}")
@@ -45,17 +45,27 @@ async def _run_ingestion_zip(ingestion_service, zip_path):
 async def upload_files(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
+    folder_path: str = Form(""),
     ingestion_service=Depends(get_ingestion_service),
 ):
     """Upload one or more files for ingestion.
 
     Accepts: .md, .txt, .pdf, .docx files.
+    Optional folder_path to place files in a subfolder under uploads/.
     """
     if not files:
         raise HTTPException(status_code=400, detail="No files provided")
 
     saved_paths: list[str] = []
     file_infos: list[dict] = []
+
+    # Determine target directory
+    if folder_path and folder_path.strip():
+        target_dir = settings.UPLOAD_DIR / folder_path.strip().replace("\\", "/")
+    else:
+        target_dir = settings.UPLOAD_DIR
+
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     for file in files:
         # Validate extension
@@ -64,8 +74,8 @@ async def upload_files(
             logger.info(f"Skipping unsupported file: {file.filename}")
             continue
 
-        # Save file to upload directory
-        save_path = settings.UPLOAD_DIR / file.filename
+        # Save file to target directory
+        save_path = target_dir / Path(file.filename).name
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -75,7 +85,7 @@ async def upload_files(
 
             saved_paths.append(str(save_path))
             file_infos.append({
-                "name": file.filename,
+                "name": Path(file.filename).name,
                 "size": len(content),
                 "type": ext,
             })
@@ -105,14 +115,23 @@ async def upload_files(
 async def upload_zip(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    folder_path: str = Form(""),
     ingestion_service=Depends(get_ingestion_service),
 ):
     """Upload a ZIP file for extraction and ingestion."""
     if not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="File must be a .zip file")
 
+    # Determine target directory
+    if folder_path and folder_path.strip():
+        target_dir = settings.UPLOAD_DIR / folder_path.strip().replace("\\", "/")
+    else:
+        target_dir = settings.UPLOAD_DIR
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+
     # Save ZIP
-    zip_path = settings.UPLOAD_DIR / file.filename
+    zip_path = target_dir / file.filename
     try:
         content = await file.read()
         with open(zip_path, "wb") as f:
@@ -134,6 +153,7 @@ async def upload_zip(
 async def upload_folder(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
+    folder_path: str = Form(""),
     ingestion_service=Depends(get_ingestion_service),
 ):
     """Upload multiple files preserving folder structure.
@@ -147,6 +167,12 @@ async def upload_folder(
     saved_paths: list[str] = []
     file_infos: list[dict] = []
 
+    # Determine base target directory
+    if folder_path and folder_path.strip():
+        base_target = settings.UPLOAD_DIR / folder_path.strip().replace("\\", "/")
+    else:
+        base_target = settings.UPLOAD_DIR
+
     for file in files:
         ext = Path(file.filename).suffix.lower()
         if ext not in settings.SUPPORTED_EXTENSIONS:
@@ -154,7 +180,7 @@ async def upload_folder(
 
         # Preserve relative path structure
         relative_path = file.filename.replace("\\", "/")
-        save_path = settings.UPLOAD_DIR / relative_path
+        save_path = base_target / relative_path
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -235,3 +261,64 @@ async def rename_file(
     if not renamed:
         raise HTTPException(status_code=404, detail="File not found")
     return {"message": "File renamed", "file_id": file_id, "name": new_name.strip()}
+
+
+@router.post("/move")
+async def move_file(
+    body: dict,
+    ingestion_service=Depends(get_ingestion_service),
+):
+    """Move a file to a new folder on disk and update index paths.
+
+    Body:
+        file_id: ID of the file to move.
+        dest_folder_path: Relative folder path under uploads/ (e.g. "Projects/Research").
+    """
+    file_id = body.get("file_id")
+    dest_folder_path = body.get("dest_folder_path", "")
+
+    if not file_id:
+        raise HTTPException(status_code=400, detail="file_id is required")
+
+    ingested = ingestion_service.get_file_by_id(file_id)
+    if not ingested:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    # Build destination path
+    if dest_folder_path and dest_folder_path.strip():
+        dest_dir = settings.UPLOAD_DIR / dest_folder_path.strip().replace("\\", "/")
+    else:
+        dest_dir = settings.UPLOAD_DIR
+
+    dest_path = dest_dir / ingested.file_name
+
+    moved = ingestion_service.move_file(file_id, str(dest_path))
+    if not moved:
+        raise HTTPException(status_code=500, detail="Failed to move file")
+
+    return {
+        "message": "File moved successfully",
+        "file_id": file_id,
+        "new_path": str(dest_path),
+    }
+
+
+@router.get("/download/{file_id}")
+async def download_file(
+    file_id: str,
+    ingestion_service=Depends(get_ingestion_service),
+):
+    """Download an ingested file."""
+    ingested = ingestion_service.get_file_by_id(file_id)
+    if not ingested:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    file_path = Path(ingested.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=ingested.file_name,
+        media_type="application/octet-stream",
+    )

@@ -184,11 +184,125 @@ class IngestionService:
         # Remove from BM25
         self.bm25_store.delete_by_file(file_path)
 
+        # Remove physical file from disk
+        try:
+            path = Path(file_path)
+            if path.exists():
+                path.unlink()
+                logger.info(f"Deleted file from disk: {file_path}")
+                # Clean up empty parent directories up to uploads root
+                parent = path.parent
+                upload_root = settings.UPLOAD_DIR
+                while parent != upload_root and parent.is_dir():
+                    try:
+                        parent.rmdir()  # Only removes if empty
+                        parent = parent.parent
+                    except OSError:
+                        break
+        except Exception as e:
+            logger.error(f"Error deleting file from disk: {e}")
+
         # Remove tracking
         del self._files[file_id]
 
         logger.info(f"Deleted file: {ingested.file_name} (id={file_id})")
         return True
+
+    def rename_file(self, file_id: str, new_name: str) -> bool:
+        """Rename an ingested file.
+
+        Args:
+            file_id: File ID to rename.
+            new_name: New file name.
+
+        Returns:
+            True if renamed, False if not found.
+        """
+        ingested = self._files.get(file_id)
+        if not ingested:
+            return False
+
+        old_path = Path(ingested.file_path)
+        new_path = old_path.parent / new_name
+
+        # Rename on disk
+        try:
+            if old_path.exists():
+                old_path.rename(new_path)
+        except Exception as e:
+            logger.error(f"Error renaming file on disk: {e}")
+            return False
+
+        # Update index paths
+        self.vector_store.update_file_paths(str(old_path), str(new_path))
+        self.bm25_store.update_file_paths(str(old_path), str(new_path))
+
+        # Update tracking
+        ingested.file_name = new_name
+        ingested.file_path = str(new_path)
+        logger.info(f"Renamed file {file_id}: {old_path.name} → {new_name}")
+        return True
+
+    def move_file(self, file_id: str, new_disk_path: str) -> bool:
+        """Move a file to a new location on disk and update indices.
+
+        Args:
+            file_id: File ID to move.
+            new_disk_path: Full destination path on disk.
+
+        Returns:
+            True if moved, False if not found.
+        """
+        ingested = self._files.get(file_id)
+        if not ingested:
+            return False
+
+        old_path = ingested.file_path
+        new_path_obj = Path(new_disk_path)
+
+        # Create destination directory
+        new_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+        # Move file on disk
+        try:
+            shutil.move(old_path, str(new_path_obj))
+        except Exception as e:
+            logger.error(f"Error moving file on disk: {e}")
+            return False
+
+        # Update index paths
+        self.vector_store.update_file_paths(old_path, str(new_path_obj))
+        self.bm25_store.update_file_paths(old_path, str(new_path_obj))
+
+        # Update tracking
+        ingested.file_path = str(new_path_obj)
+        logger.info(f"Moved file {file_id}: {old_path} → {new_path_obj}")
+
+        # Clean up empty source directories
+        try:
+            old_parent = Path(old_path).parent
+            upload_root = settings.UPLOAD_DIR
+            while old_parent != upload_root and old_parent.is_dir():
+                try:
+                    old_parent.rmdir()
+                    old_parent = old_parent.parent
+                except OSError:
+                    break
+        except Exception:
+            pass
+
+        return True
+
+    def get_file_by_id(self, file_id: str) -> Optional[IngestedFile]:
+        """Get IngestedFile by ID.
+
+        Args:
+            file_id: File ID.
+
+        Returns:
+            IngestedFile or None.
+        """
+        return self._files.get(file_id)
 
     def get_status(self) -> dict:
         """Get current ingestion status.
@@ -245,24 +359,6 @@ class IngestionService:
             if f:
                 paths.append(f.file_path)
         return paths
-
-    def rename_file(self, file_id: str, new_name: str) -> bool:
-        """Rename an ingested file.
-
-        Args:
-            file_id: File ID to rename.
-            new_name: New file name.
-
-        Returns:
-            True if renamed, False if not found.
-        """
-        ingested = self._files.get(file_id)
-        if not ingested:
-            return False
-
-        ingested.file_name = new_name
-        logger.info(f"Renamed file {file_id} to: {new_name}")
-        return True
 
     async def _process_files(self, files: list[IngestedFile]):
         """Process files through the ingestion pipeline.

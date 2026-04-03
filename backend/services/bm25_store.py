@@ -133,6 +133,39 @@ class BM25Store:
         logger.info(f"Removed {removed} documents from BM25 for {file_path}")
         return removed
 
+    def update_file_paths(self, old_path: str, new_path: str) -> int:
+        """Update file paths in metadata when files/folders are moved.
+
+        Matches by exact path or path prefix (for folder moves).
+
+        Args:
+            old_path: The original file/folder path.
+            new_path: The new file/folder path.
+
+        Returns:
+            Number of documents updated.
+        """
+        self.initialize()
+
+        updated = 0
+        old_norm = old_path.replace("\\", "/")
+        new_norm = new_path.replace("\\", "/")
+
+        for meta in self.metadata:
+            meta_path = meta.get("file_path", "").replace("\\", "/")
+            if meta_path == old_norm:
+                meta["file_path"] = new_path
+                updated += 1
+            elif meta_path.startswith(old_norm + "/"):
+                meta["file_path"] = new_path + meta_path[len(old_norm):]
+                updated += 1
+
+        if updated > 0:
+            self._save()
+            logger.info(f"Updated {updated} BM25 paths: {old_path} → {new_path}")
+
+        return updated
+
     def get_stats(self) -> dict:
         """Get index statistics."""
         self.initialize()

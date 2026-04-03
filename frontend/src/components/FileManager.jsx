@@ -3,14 +3,22 @@ import {
   getIngestedFiles,
   deleteFile,
   renameFile,
-  uploadFiles,
-  uploadZip,
+  moveFile,
+  downloadFile,
+  uploadFilesWithProgress,
+  uploadZipWithProgress,
+  uploadFolderWithProgress,
   getFolders,
   saveFolders,
+  createFolder as createFolderApi,
+  renameFolder as renameFolderApi,
+  deleteFolderApi,
+  resolveFolderPath,
 } from '../services/api';
 import FileContextMenu from './FileContextMenu';
 import CreateFolderModal from './CreateFolderModal';
 import MoveFileModal from './MoveFileModal';
+import ConfirmDialog from './ConfirmDialog';
 
 function generateId() {
   return 'f_' + Math.random().toString(36).slice(2, 11);
@@ -23,6 +31,7 @@ function getFileIcon(fileName) {
     case 'docx': case 'doc': return '📘';
     case 'md': return '📗';
     case 'txt': return '📄';
+    case 'zip': return '🗜️';
     default: return '📄';
   }
 }
@@ -63,11 +72,35 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
   const [editNameValue, setEditNameValue] = useState('');
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [showMoveModal, setShowMoveModal] = useState(null);
-  const [dragOver, setDragOver] = useState(false);
+  const [dragOverArea, setDragOverArea] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [showUploadMenu, setShowUploadMenu] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  // Upload progress
+  const [uploadProgress, setUploadProgress] = useState(null);
+  // { files: [{ name, size }], percent: 0, status: 'uploading' | 'done' | 'error', message: '' }
+
+  // Drag-to-move state
+  const [dragItem, setDragItem] = useState(null); // { id, type: 'file'|'folder' }
+  const [dragOverTarget, setDragOverTarget] = useState(null); // folder id being hovered
 
   const editInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const zipInputRef = useRef(null);
+  const folderInputRef = useRef(null);
+  const uploadMenuRef = useRef(null);
+
+  // Close upload menu on outside click
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (uploadMenuRef.current && !uploadMenuRef.current.contains(e.target)) {
+        setShowUploadMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
 
   // Fetch data
   const refreshData = useCallback(async () => {
@@ -105,6 +138,17 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     []
   );
 
+  // Resolve current folder's disk path
+  const resolveCurrentFolderPath = useCallback(async () => {
+    if (!currentFolderId) return '';
+    try {
+      const result = await resolveFolderPath(currentFolderId);
+      return result.path || '';
+    } catch {
+      return '';
+    }
+  }, [currentFolderId]);
+
   // Breadcrumb path
   const getBreadcrumbPath = () => {
     const path = [];
@@ -129,11 +173,9 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
   const getRecursiveFileIds = useCallback(
     (folderId) => {
       const ids = [];
-      // Direct files
       for (const [fileId, fId] of Object.entries(fileAssignments)) {
         if (fId === folderId) ids.push(fileId);
       }
-      // Recurse into subfolders
       const subFolders = folders.filter((f) => f.parentId === folderId);
       for (const sub of subFolders) {
         ids.push(...getRecursiveFileIds(sub.id));
@@ -180,7 +222,8 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     return selectedItems.has(key);
   };
 
-  // Context menu
+  // ─── Context Menu ───
+
   const handleContextMenu = (e, item, isFolder = false) => {
     e.preventDefault();
     e.stopPropagation();
@@ -211,7 +254,7 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             icon: '🗑️',
             label: 'Delete Folder',
             danger: true,
-            onClick: () => handleDeleteFolder(item.id),
+            onClick: () => confirmDeleteFolder(item),
           },
         ]
       : [
@@ -237,23 +280,86 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             label: 'Move to Folder',
             onClick: () => setShowMoveModal({ type: 'file', id: item.file_id }),
           },
+          {
+            icon: '⬇️',
+            label: 'Download',
+            onClick: () => downloadFile(item.file_id),
+          },
           { divider: true },
           {
             icon: '🗑️',
             label: 'Delete',
             danger: true,
-            onClick: () => handleDeleteFile(item.file_id),
+            onClick: () => confirmDeleteFile(item),
           },
         ];
 
     setContextMenu({ x: e.clientX, y: e.clientY, items: menuItems });
   };
 
-  // File actions
+  // ─── Delete with confirmation ───
+
+  const confirmDeleteFile = (file) => {
+    setDeleteConfirm({
+      title: 'Delete File?',
+      message: 'This file and all its indexed data will be permanently removed.',
+      items: [{ icon: getFileIcon(file.file_name), name: file.file_name }],
+      onConfirm: async () => {
+        setDeleteConfirm(null);
+        await handleDeleteFile(file.file_id);
+      },
+    });
+  };
+
+  const confirmDeleteFolder = (folder) => {
+    const fileCount = getFolderItemCount(folder.id);
+    setDeleteConfirm({
+      title: 'Delete Folder?',
+      message: `This folder${fileCount > 0 ? ` contains ${fileCount} file(s) that will be moved to the parent folder` : ' is empty'}. The folder will be removed.`,
+      items: [{ icon: '📁', name: folder.name }],
+      onConfirm: async () => {
+        setDeleteConfirm(null);
+        await handleDeleteFolder(folder.id);
+      },
+    });
+  };
+
+  const confirmBatchDelete = () => {
+    const fileItems = [];
+    const folderItems = [];
+
+    for (const key of selectedItems) {
+      if (key.startsWith('folder:')) {
+        const fId = key.replace('folder:', '');
+        const folder = folders.find((f) => f.id === fId);
+        if (folder) folderItems.push({ icon: '📁', name: folder.name });
+      } else {
+        const file = files.find((f) => f.file_id === key);
+        if (file) fileItems.push({ icon: getFileIcon(file.file_name), name: file.file_name });
+      }
+    }
+
+    const allItems = [...folderItems, ...fileItems];
+    const parts = [];
+    if (fileItems.length > 0) parts.push(`${fileItems.length} file(s)`);
+    if (folderItems.length > 0) parts.push(`${folderItems.length} folder(s)`);
+
+    setDeleteConfirm({
+      title: `Delete ${parts.join(' and ')}?`,
+      message: 'This action cannot be undone. Files will be permanently removed.',
+      items: allItems.slice(0, 10),
+      onConfirm: async () => {
+        setDeleteConfirm(null);
+        await handleBatchDelete();
+      },
+    });
+  };
+
+  // ─── File/Folder Actions ───
+
   const handleDeleteFile = async (fileId) => {
     try {
       await deleteFile(fileId);
-      // Remove from assignments
       const newAssignments = { ...fileAssignments };
       delete newAssignments[fileId];
       setFileAssignments(newAssignments);
@@ -273,11 +379,16 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
 
     if (isFolder) {
       const folderId = id.replace('folder:', '');
-      const newFolders = folders.map((f) =>
-        f.id === folderId ? { ...f, name: trimmed } : f
-      );
-      setFolders(newFolders);
-      await persistFolders(newFolders, fileAssignments);
+      try {
+        await renameFolderApi(folderId, trimmed);
+        // Update local state
+        const newFolders = folders.map((f) =>
+          f.id === folderId ? { ...f, name: trimmed } : f
+        );
+        setFolders(newFolders);
+      } catch (e) {
+        console.error('Folder rename failed:', e);
+      }
     } else {
       try {
         await renameFile(id, trimmed);
@@ -291,50 +402,65 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
 
   // Folder actions
   const handleCreateFolder = async (name) => {
-    const newFolder = {
-      id: generateId(),
-      name,
-      parentId: currentFolderId,
-    };
-    const newFolders = [...folders, newFolder];
-    setFolders(newFolders);
-    await persistFolders(newFolders, fileAssignments);
+    const newFolderId = generateId();
+    try {
+      await createFolderApi(newFolderId, name, currentFolderId);
+      const newFolders = [...folders, { id: newFolderId, name, parentId: currentFolderId }];
+      setFolders(newFolders);
+    } catch (e) {
+      console.error('Create folder failed:', e);
+    }
   };
 
   const handleDeleteFolder = async (folderId) => {
-    // Delete folder and move its files to parent
-    const folder = folders.find((f) => f.id === folderId);
-    if (!folder) return;
-
-    const newAssignments = { ...fileAssignments };
-    // Reassign files to parent
-    for (const [fileId, fId] of Object.entries(newAssignments)) {
-      if (fId === folderId) {
-        newAssignments[fileId] = folder.parentId;
+    try {
+      await deleteFolderApi(folderId);
+      // Update local state
+      const folder = folders.find((f) => f.id === folderId);
+      if (!folder) return;
+      const newAssignments = { ...fileAssignments };
+      for (const [fileId, fId] of Object.entries(newAssignments)) {
+        if (fId === folderId) newAssignments[fileId] = folder.parentId;
       }
+      const newFolders = folders
+        .filter((f) => f.id !== folderId)
+        .map((f) => (f.parentId === folderId ? { ...f, parentId: folder.parentId } : f));
+      setFolders(newFolders);
+      setFileAssignments(newAssignments);
+    } catch (e) {
+      console.error('Delete folder failed:', e);
     }
-    // Move subfolders to parent
-    const newFolders = folders
-      .filter((f) => f.id !== folderId)
-      .map((f) => (f.parentId === folderId ? { ...f, parentId: folder.parentId } : f));
-
-    setFolders(newFolders);
-    setFileAssignments(newAssignments);
-    await persistFolders(newFolders, newAssignments);
   };
 
   const handleMoveFile = async (destinationFolderId) => {
     if (!showMoveModal) return;
 
-    const newAssignments = { ...fileAssignments };
-
     if (showMoveModal.type === 'file') {
+      // Resolve destination folder path
+      let destPath = '';
+      if (destinationFolderId) {
+        try {
+          const result = await resolveFolderPath(destinationFolderId);
+          destPath = result.path || '';
+        } catch { /* use root */ }
+      }
+
+      // Move on server
+      try {
+        await moveFile(showMoveModal.id, destPath);
+      } catch (e) {
+        console.error('Server move failed:', e);
+      }
+
+      // Update folder assignments
+      const newAssignments = { ...fileAssignments };
       newAssignments[showMoveModal.id] = destinationFolderId;
+      setFileAssignments(newAssignments);
+      await persistFolders(folders, newAssignments);
     }
 
-    setFileAssignments(newAssignments);
-    await persistFolders(folders, newAssignments);
     setShowMoveModal(null);
+    refreshData();
   };
 
   // Batch delete
@@ -360,30 +486,30 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     setSelectedItems(new Set());
   };
 
-  // Upload
-  const handleDrop = async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
+  // ─── Upload ───
 
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    if (droppedFiles.length === 0) return;
-
+  const doUpload = async (uploadFn, files, label) => {
     setUploading(true);
-    try {
-      let result;
-      if (droppedFiles.length === 1 && droppedFiles[0].name.endsWith('.zip')) {
-        result = await uploadZip(droppedFiles[0]);
-      } else {
-        result = await uploadFiles(droppedFiles);
-      }
+    setUploadProgress({
+      files: Array.from(files).map((f) => ({ name: f.name, size: f.size })),
+      percent: 0,
+      status: 'uploading',
+      message: `Uploading ${label}...`,
+    });
 
-      // Assign uploaded files to current folder after a brief delay for indexing
+    try {
+      const folderPath = await resolveCurrentFolderPath();
+      await uploadFn(files, folderPath, (progress) => {
+        setUploadProgress((prev) => prev ? { ...prev, percent: progress.percent } : null);
+      });
+
+      setUploadProgress((prev) => prev ? { ...prev, percent: 100, status: 'done', message: 'Upload complete! Processing...' } : null);
+
+      // Refresh and assign to current folder
       setTimeout(async () => {
         const freshFiles = await getIngestedFiles();
         setFiles(freshFiles);
 
-        // Find newly added files and assign to current folder
         if (currentFolderId) {
           const existingIds = new Set(files.map((f) => f.file_id));
           const newAssignments = { ...fileAssignments };
@@ -395,42 +521,171 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
           setFileAssignments(newAssignments);
           await persistFolders(folders, newAssignments);
         }
+
+        // Auto-dismiss progress after 3s
+        setTimeout(() => setUploadProgress(null), 3000);
       }, 1500);
     } catch (e) {
       console.error('Upload failed:', e);
+      setUploadProgress((prev) => prev ? { ...prev, status: 'error', message: `Upload failed: ${e.message}` } : null);
+      setTimeout(() => setUploadProgress(null), 5000);
     } finally {
       setUploading(false);
     }
   };
 
-  const handleFileInputChange = async (e) => {
-    const selectedFiles = Array.from(e.target.files);
-    if (selectedFiles.length === 0) return;
+  const handleFileUpload = (e) => {
+    const selected = Array.from(e.target.files);
+    if (selected.length === 0) return;
+    doUpload(uploadFilesWithProgress, selected, `${selected.length} file(s)`);
+    e.target.value = '';
+    setShowUploadMenu(false);
+  };
 
-    setUploading(true);
-    try {
-      await uploadFiles(selectedFiles);
-      setTimeout(async () => {
-        const freshFiles = await getIngestedFiles();
-        setFiles(freshFiles);
-        if (currentFolderId) {
-          const existingIds = new Set(files.map((f) => f.file_id));
-          const newAssignments = { ...fileAssignments };
-          for (const f of freshFiles) {
-            if (!existingIds.has(f.file_id) && !newAssignments[f.file_id]) {
-              newAssignments[f.file_id] = currentFolderId;
-            }
-          }
-          setFileAssignments(newAssignments);
-          await persistFolders(folders, newAssignments);
-        }
-      }, 1500);
-    } catch (e) {
-      console.error('Upload failed:', e);
-    } finally {
-      setUploading(false);
-      e.target.value = '';
+  const handleZipUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    doUpload(
+      (files, folderPath, onProgress) => uploadZipWithProgress(file, folderPath, onProgress),
+      [file],
+      file.name
+    );
+    e.target.value = '';
+    setShowUploadMenu(false);
+  };
+
+  const handleFolderUpload = (e) => {
+    const selected = Array.from(e.target.files);
+    if (selected.length === 0) return;
+    doUpload(uploadFolderWithProgress, selected, `${selected.length} file(s) from folder`);
+    e.target.value = '';
+    setShowUploadMenu(false);
+  };
+
+  // Drop zone upload
+  const handleDropUpload = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverArea(false);
+
+    // Ignore if this is a file-move drag
+    if (dragItem) return;
+
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    if (droppedFiles.length === 0) return;
+
+    if (droppedFiles.length === 1 && droppedFiles[0].name.endsWith('.zip')) {
+      doUpload(
+        (files, folderPath, onProgress) => uploadZipWithProgress(droppedFiles[0], folderPath, onProgress),
+        droppedFiles,
+        droppedFiles[0].name
+      );
+    } else {
+      doUpload(uploadFilesWithProgress, droppedFiles, `${droppedFiles.length} file(s)`);
     }
+  };
+
+  // ─── Drag-to-Move (files/folders between folders) ───
+
+  const handleDragStart = (e, id, type) => {
+    setDragItem({ id, type });
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', JSON.stringify({ id, type }));
+    // Add dragging class after a tick
+    requestAnimationFrame(() => {
+      e.target.classList.add('dragging');
+    });
+  };
+
+  const handleDragEnd = (e) => {
+    e.target.classList.remove('dragging');
+    setDragItem(null);
+    setDragOverTarget(null);
+  };
+
+  const handleFolderDragOver = (e, folderId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dragItem) return;
+    // Don't allow dropping on self
+    if (dragItem.type === 'folder' && dragItem.id === folderId) return;
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverTarget(folderId);
+  };
+
+  const handleFolderDragLeave = (e) => {
+    e.preventDefault();
+    setDragOverTarget(null);
+  };
+
+  const handleFolderDrop = async (e, targetFolderId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverTarget(null);
+
+    if (!dragItem) return;
+
+    // Collect items to move — if dragged item is selected, move all selected
+    const itemsToMove = [];
+    const dragKey = dragItem.type === 'folder' ? `folder:${dragItem.id}` : dragItem.id;
+
+    if (selectedItems.has(dragKey) && selectedItems.size > 1) {
+      // Move all selected items
+      for (const key of selectedItems) {
+        if (key.startsWith('folder:')) {
+          itemsToMove.push({ id: key.replace('folder:', ''), type: 'folder' });
+        } else {
+          itemsToMove.push({ id: key, type: 'file' });
+        }
+      }
+    } else {
+      itemsToMove.push(dragItem);
+    }
+
+    // Resolve destination path
+    let destPath = '';
+    if (targetFolderId) {
+      try {
+        const result = await resolveFolderPath(targetFolderId);
+        destPath = result.path || '';
+      } catch { /* root */ }
+    }
+
+    const newAssignments = { ...fileAssignments };
+    const newFolders = [...folders];
+
+    for (const item of itemsToMove) {
+      if (item.type === 'file') {
+        // Move file on server + update assignment
+        try {
+          await moveFile(item.id, destPath);
+          newAssignments[item.id] = targetFolderId;
+        } catch (e) {
+          console.error('Move failed:', e);
+        }
+      } else {
+        // Move folder — update parentId
+        const idx = newFolders.findIndex((f) => f.id === item.id);
+        if (idx >= 0) {
+          newFolders[idx] = { ...newFolders[idx], parentId: targetFolderId };
+        }
+        // TODO: Also move folder on disk if needed
+      }
+    }
+
+    setFolders(newFolders);
+    setFileAssignments(newAssignments);
+    await persistFolders(newFolders, newAssignments);
+    setSelectedItems(new Set());
+    setDragItem(null);
+    refreshData();
+  };
+
+  // Breadcrumb drop (move to ancestor)
+  const handleBreadcrumbDrop = async (e, targetFolderId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await handleFolderDrop(e, targetFolderId);
   };
 
   // Scope: Ask about current folder
@@ -460,9 +715,13 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
   return (
     <div
       className="file-manager"
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
-      onDrop={handleDrop}
+      onDragOver={(e) => {
+        if (!dragItem) { e.preventDefault(); setDragOverArea(true); }
+      }}
+      onDragLeave={(e) => {
+        if (!dragItem) { e.preventDefault(); setDragOverArea(false); }
+      }}
+      onDrop={handleDropUpload}
       onClick={() => setContextMenu(null)}
     >
       {/* Header */}
@@ -477,19 +736,51 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
           <span className="fm-file-count">{files.length} files</span>
         </div>
         <div className="fm-header-right">
-          <button
-            className="fm-btn primary"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            id="fm-upload-btn"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="17 8 12 3 7 8"/>
-              <line x1="12" y1="3" x2="12" y2="15"/>
-            </svg>
-            {uploading ? 'Uploading...' : 'Upload'}
-          </button>
+          {/* Upload dropdown */}
+          <div className="fm-upload-dropdown" ref={uploadMenuRef}>
+            <button
+              className="fm-btn primary"
+              onClick={() => setShowUploadMenu(!showUploadMenu)}
+              disabled={uploading}
+              id="fm-upload-btn"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              {uploading ? 'Uploading...' : 'Upload'}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 4 }}>
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            {showUploadMenu && (
+              <div className="fm-upload-menu">
+                <button className="fm-upload-menu-item" onClick={() => fileInputRef.current?.click()}>
+                  <span className="fm-upload-menu-icon">📄</span>
+                  <div>
+                    <div className="fm-upload-menu-label">Upload Files</div>
+                    <div className="fm-upload-menu-hint">PDF, DOCX, MD, TXT</div>
+                  </div>
+                </button>
+                <button className="fm-upload-menu-item" onClick={() => zipInputRef.current?.click()}>
+                  <span className="fm-upload-menu-icon">🗜️</span>
+                  <div>
+                    <div className="fm-upload-menu-label">Upload ZIP</div>
+                    <div className="fm-upload-menu-hint">Extract and process all files</div>
+                  </div>
+                </button>
+                <button className="fm-upload-menu-item" onClick={() => folderInputRef.current?.click()}>
+                  <span className="fm-upload-menu-icon">📂</span>
+                  <div>
+                    <div className="fm-upload-menu-label">Upload Folder</div>
+                    <div className="fm-upload-menu-hint">Preserve folder structure</div>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
             className="fm-btn secondary"
             onClick={() => setShowCreateFolder(true)}
@@ -503,24 +794,42 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             New Folder
           </button>
         </div>
+
+        {/* Hidden file inputs */}
         <input
           type="file"
           ref={fileInputRef}
           style={{ display: 'none' }}
           multiple
-          accept=".pdf,.docx,.md,.txt,.zip"
-          onChange={handleFileInputChange}
+          accept=".pdf,.docx,.md,.txt"
+          onChange={handleFileUpload}
+        />
+        <input
+          type="file"
+          ref={zipInputRef}
+          style={{ display: 'none' }}
+          accept=".zip"
+          onChange={handleZipUpload}
+        />
+        <input
+          type="file"
+          ref={folderInputRef}
+          style={{ display: 'none' }}
+          webkitdirectory=""
+          directory=""
+          onChange={handleFolderUpload}
         />
       </div>
 
       {/* Toolbar */}
       <div className="fm-toolbar">
         <div className="fm-toolbar-left">
-          {/* Breadcrumb */}
           <nav className="fm-breadcrumb">
             <button
-              className="fm-breadcrumb-item root"
+              className={`fm-breadcrumb-item root ${dragOverTarget === null && dragItem ? 'drag-target' : ''}`}
               onClick={() => setCurrentFolderId(null)}
+              onDragOver={(e) => { if (dragItem) { e.preventDefault(); setDragOverTarget(null); } }}
+              onDrop={(e) => handleBreadcrumbDrop(e, null)}
             >
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -532,10 +841,10 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
               <React.Fragment key={folder.id}>
                 <span className="fm-breadcrumb-sep">›</span>
                 <button
-                  className={`fm-breadcrumb-item ${
-                    i === breadcrumbPath.length - 1 ? 'active' : ''
-                  }`}
+                  className={`fm-breadcrumb-item ${i === breadcrumbPath.length - 1 ? 'active' : ''} ${dragOverTarget === folder.id && dragItem ? 'drag-target' : ''}`}
                   onClick={() => setCurrentFolderId(folder.id)}
+                  onDragOver={(e) => { if (dragItem) { e.preventDefault(); setDragOverTarget(folder.id); } }}
+                  onDrop={(e) => handleBreadcrumbDrop(e, folder.id)}
                 >
                   {folder.name}
                 </button>
@@ -545,7 +854,6 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
         </div>
 
         <div className="fm-toolbar-right">
-          {/* Scope button for current folder */}
           {currentFolderId && (
             <button
               className="fm-btn scope-btn"
@@ -556,11 +864,9 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             </button>
           )}
 
-          {/* Search */}
           <div className="fm-search">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
             <input
               type="text"
@@ -572,7 +878,6 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             />
           </div>
 
-          {/* Sort */}
           <select
             className="fm-sort"
             value={sortBy}
@@ -584,42 +889,25 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             <option value="status">Status</option>
           </select>
 
-          {/* View toggle */}
           <div className="fm-view-toggle">
             <button
               className={`fm-view-btn ${viewMode === 'grid' ? 'active' : ''}`}
               onClick={() => setViewMode('grid')}
               title="Grid view"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="7" height="7"/>
-                <rect x="14" y="3" width="7" height="7"/>
-                <rect x="14" y="14" width="7" height="7"/>
-                <rect x="3" y="14" width="7" height="7"/>
-              </svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
             </button>
             <button
               className={`fm-view-btn ${viewMode === 'list' ? 'active' : ''}`}
               onClick={() => setViewMode('list')}
               title="List view"
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="8" y1="6" x2="21" y2="6"/>
-                <line x1="8" y1="12" x2="21" y2="12"/>
-                <line x1="8" y1="18" x2="21" y2="18"/>
-                <line x1="3" y1="6" x2="3.01" y2="6"/>
-                <line x1="3" y1="12" x2="3.01" y2="12"/>
-                <line x1="3" y1="18" x2="3.01" y2="18"/>
-              </svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
             </button>
           </div>
 
-          {/* Batch actions */}
           {hasSelection && (
-            <button
-              className="fm-btn danger"
-              onClick={handleBatchDelete}
-            >
+            <button className="fm-btn danger" onClick={confirmBatchDelete}>
               🗑️ Delete ({selectedItems.size})
             </button>
           )}
@@ -627,7 +915,7 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
       </div>
 
       {/* File Grid / List */}
-      <div className={`fm-content ${dragOver ? 'drag-active' : ''}`}>
+      <div className={`fm-content ${dragOverArea && !dragItem ? 'drag-active' : ''}`}>
         {totalItems === 0 && !searchQuery ? (
           <div className="fm-empty">
             <div className="fm-empty-icon">
@@ -662,7 +950,7 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
             {filteredFolders.map((folder) => (
               <div
                 key={folder.id}
-                className={`fm-card folder ${isSelected(folder.id, true) ? 'selected' : ''}`}
+                className={`fm-card folder ${isSelected(folder.id, true) ? 'selected' : ''} ${dragOverTarget === folder.id ? 'drag-over' : ''}`}
                 onClick={(e) => {
                   if (e.detail === 2) {
                     setCurrentFolderId(folder.id);
@@ -671,6 +959,13 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
                   }
                 }}
                 onContextMenu={(e) => handleContextMenu(e, folder, true)}
+                draggable="true"
+                onDragStart={(e) => handleDragStart(e, folder.id, 'folder')}
+                onDragEnd={handleDragEnd}
+                onDragOver={(e) => handleFolderDragOver(e, folder.id)}
+                onDragEnter={(e) => { e.preventDefault(); if (dragItem) setDragOverTarget(folder.id); }}
+                onDragLeave={handleFolderDragLeave}
+                onDrop={(e) => handleFolderDrop(e, folder.id)}
               >
                 <div className="fm-card-check">
                   <input
@@ -681,7 +976,7 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
                   />
                 </div>
                 <div className="fm-card-icon folder-icon">
-                  <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" stroke="none" >
+                  <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" stroke="none">
                     <path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
                   </svg>
                 </div>
@@ -727,6 +1022,9 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
                   onScopeChange([file.file_id], file.file_name);
                   onSwitchToChat();
                 }}
+                draggable="true"
+                onDragStart={(e) => handleDragStart(e, file.file_id, 'file')}
+                onDragEnd={handleDragEnd}
               >
                 <div className="fm-card-check">
                   <input
@@ -775,8 +1073,8 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
           </div>
         )}
 
-        {/* Drop overlay */}
-        {dragOver && (
+        {/* Drop overlay for file upload */}
+        {dragOverArea && !dragItem && (
           <div className="fm-drop-overlay">
             <div className="fm-drop-content">
               <div className="fm-drop-icon">📁</div>
@@ -792,6 +1090,40 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
           </div>
         )}
       </div>
+
+      {/* Upload Progress Panel */}
+      {uploadProgress && (
+        <div className={`fm-upload-progress ${uploadProgress.status}`}>
+          <div className="fm-upload-progress-header">
+            <span className="fm-upload-progress-title">
+              {uploadProgress.status === 'uploading' && '⏳'}
+              {uploadProgress.status === 'done' && '✅'}
+              {uploadProgress.status === 'error' && '❌'}
+              {' '}{uploadProgress.message}
+            </span>
+            <button className="fm-upload-progress-close" onClick={() => setUploadProgress(null)}>✕</button>
+          </div>
+          <div className="fm-upload-progress-bar-container">
+            <div
+              className="fm-upload-progress-bar"
+              style={{ width: `${uploadProgress.percent}%` }}
+            />
+          </div>
+          <div className="fm-upload-progress-files">
+            {uploadProgress.files.slice(0, 5).map((f, i) => (
+              <div key={i} className="fm-upload-progress-file">
+                <span className="fm-upload-progress-file-name">{f.name}</span>
+                <span className="fm-upload-progress-file-size">{formatSize(f.size)}</span>
+              </div>
+            ))}
+            {uploadProgress.files.length > 5 && (
+              <div className="fm-upload-progress-more">
+                +{uploadProgress.files.length - 5} more file(s)
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Context Menu */}
       {contextMenu && (
@@ -823,6 +1155,19 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
               ? fileAssignments[showMoveModal.id] || null
               : null
           }
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirm && (
+        <ConfirmDialog
+          title={deleteConfirm.title}
+          message={deleteConfirm.message}
+          items={deleteConfirm.items}
+          confirmLabel="Delete"
+          confirmDanger={true}
+          onConfirm={deleteConfirm.onConfirm}
+          onCancel={() => setDeleteConfirm(null)}
         />
       )}
     </div>

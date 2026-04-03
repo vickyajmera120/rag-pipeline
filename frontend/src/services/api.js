@@ -4,14 +4,139 @@
 
 const API_BASE = '/api';
 
+// ─── Upload with progress (XMLHttpRequest) ───
+
 /**
- * Upload files for ingestion.
+ * Upload files with progress tracking.
+ * @param {File[]} files
+ * @param {string} folderPath - relative folder path under uploads/
+ * @param {function} onProgress - callback({ loaded, total, percent })
+ * @returns {Promise<object>}
  */
+export function uploadFilesWithProgress(files, folderPath = '', onProgress = null) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append('files', file);
+    }
+    formData.append('folder_path', folderPath);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/ingest/files`);
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          onProgress({ loaded: e.loaded, total: e.total, percent: Math.round((e.loaded / e.total) * 100) });
+        }
+      });
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.detail || 'Upload failed'));
+        } catch {
+          reject(new Error('Upload failed'));
+        }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(formData);
+  });
+}
+
+/**
+ * Upload ZIP with progress tracking.
+ */
+export function uploadZipWithProgress(file, folderPath = '', onProgress = null) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('folder_path', folderPath);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/ingest/zip`);
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          onProgress({ loaded: e.loaded, total: e.total, percent: Math.round((e.loaded / e.total) * 100) });
+        }
+      });
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.detail || 'ZIP upload failed'));
+        } catch {
+          reject(new Error('ZIP upload failed'));
+        }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(formData);
+  });
+}
+
+/**
+ * Upload folder files with progress tracking.
+ */
+export function uploadFolderWithProgress(files, folderPath = '', onProgress = null) {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    for (const file of files) {
+      const path = file.webkitRelativePath || file.name;
+      formData.append('files', file, path);
+    }
+    formData.append('folder_path', folderPath);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/ingest/folder`);
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          onProgress({ loaded: e.loaded, total: e.total, percent: Math.round((e.loaded / e.total) * 100) });
+        }
+      });
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(JSON.parse(xhr.responseText));
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.detail || 'Folder upload failed'));
+        } catch {
+          reject(new Error('Folder upload failed'));
+        }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(formData);
+  });
+}
+
+// ─── Legacy upload functions (used by chat UploadPanel) ───
+
 export async function uploadFiles(files) {
   const formData = new FormData();
   for (const file of files) {
     formData.append('files', file);
   }
+  formData.append('folder_path', '');
 
   const res = await fetch(`${API_BASE}/ingest/files`, {
     method: 'POST',
@@ -26,12 +151,10 @@ export async function uploadFiles(files) {
   return res.json();
 }
 
-/**
- * Upload a ZIP file for ingestion.
- */
 export async function uploadZip(file) {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('folder_path', '');
 
   const res = await fetch(`${API_BASE}/ingest/zip`, {
     method: 'POST',
@@ -46,16 +169,13 @@ export async function uploadZip(file) {
   return res.json();
 }
 
-/**
- * Upload folder files for ingestion.
- */
 export async function uploadFolder(files) {
   const formData = new FormData();
   for (const file of files) {
-    // Use webkitRelativePath to preserve folder structure
     const path = file.webkitRelativePath || file.name;
     formData.append('files', file, path);
   }
+  formData.append('folder_path', '');
 
   const res = await fetch(`${API_BASE}/ingest/folder`, {
     method: 'POST',
@@ -70,27 +190,20 @@ export async function uploadFolder(files) {
   return res.json();
 }
 
-/**
- * Get ingestion status.
- */
+// ─── File operations ───
+
 export async function getIngestionStatus() {
   const res = await fetch(`${API_BASE}/ingest/status`);
   if (!res.ok) throw new Error('Failed to get status');
   return res.json();
 }
 
-/**
- * Get list of ingested files.
- */
 export async function getIngestedFiles() {
   const res = await fetch(`${API_BASE}/ingest/files`);
   if (!res.ok) throw new Error('Failed to get files');
   return res.json();
 }
 
-/**
- * Delete an ingested file.
- */
 export async function deleteFile(fileId) {
   const res = await fetch(`${API_BASE}/ingest/file/${fileId}`, {
     method: 'DELETE',
@@ -99,9 +212,6 @@ export async function deleteFile(fileId) {
   return res.json();
 }
 
-/**
- * Rename an ingested file.
- */
 export async function renameFile(fileId, newName) {
   const res = await fetch(`${API_BASE}/ingest/file/${fileId}`, {
     method: 'PATCH',
@@ -112,18 +222,34 @@ export async function renameFile(fileId, newName) {
   return res.json();
 }
 
-/**
- * Get folder structure.
- */
+export async function moveFile(fileId, destFolderPath) {
+  const res = await fetch(`${API_BASE}/ingest/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ file_id: fileId, dest_folder_path: destFolderPath }),
+  });
+  if (!res.ok) throw new Error('Failed to move file');
+  return res.json();
+}
+
+export function downloadFile(fileId) {
+  // Trigger browser download
+  const a = document.createElement('a');
+  a.href = `${API_BASE}/ingest/download/${fileId}`;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ─── Folder operations ───
+
 export async function getFolders() {
   const res = await fetch(`${API_BASE}/folders`);
   if (!res.ok) throw new Error('Failed to get folders');
   return res.json();
 }
 
-/**
- * Save folder structure.
- */
 export async function saveFolders(folderData) {
   const res = await fetch(`${API_BASE}/folders`, {
     method: 'PUT',
@@ -134,9 +260,44 @@ export async function saveFolders(folderData) {
   return res.json();
 }
 
-/**
- * Send a query (non-streaming).
- */
+export async function createFolder(id, name, parentId) {
+  const res = await fetch(`${API_BASE}/folders/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, name, parentId }),
+  });
+  if (!res.ok) throw new Error('Failed to create folder');
+  return res.json();
+}
+
+export async function renameFolder(id, newName) {
+  const res = await fetch(`${API_BASE}/folders/rename`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, newName }),
+  });
+  if (!res.ok) throw new Error('Failed to rename folder');
+  return res.json();
+}
+
+export async function deleteFolderApi(id) {
+  const res = await fetch(`${API_BASE}/folders/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!res.ok) throw new Error('Failed to delete folder');
+  return res.json();
+}
+
+export async function resolveFolderPath(folderId) {
+  const res = await fetch(`${API_BASE}/folders/resolve-path/${folderId}`);
+  if (!res.ok) throw new Error('Failed to resolve folder path');
+  return res.json();
+}
+
+// ─── Query ───
+
 export async function sendQuery(query, conversationId = null, topK = 5, fileIds = null) {
   const body = {
     query,
@@ -161,10 +322,6 @@ export async function sendQuery(query, conversationId = null, topK = 5, fileIds 
   return res.json();
 }
 
-/**
- * Send a query with streaming response via SSE.
- * Returns an async generator yielding parsed events.
- */
 export async function* sendQueryStream(query, conversationId = null, topK = 5, fileIds = null) {
   const body = {
     query,
@@ -211,18 +368,14 @@ export async function* sendQueryStream(query, conversationId = null, topK = 5, f
   }
 }
 
-/**
- * Get conversation list.
- */
+// ─── Conversations & System ───
+
 export async function getConversations() {
   const res = await fetch(`${API_BASE}/conversations`);
   if (!res.ok) throw new Error('Failed to get conversations');
   return res.json();
 }
 
-/**
- * Delete a conversation.
- */
 export async function deleteConversation(conversationId) {
   const res = await fetch(`${API_BASE}/conversations/${conversationId}`, {
     method: 'DELETE',
@@ -231,18 +384,12 @@ export async function deleteConversation(conversationId) {
   return res.json();
 }
 
-/**
- * Get system stats.
- */
 export async function getSystemStats() {
   const res = await fetch(`${API_BASE}/stats`);
   if (!res.ok) throw new Error('Failed to get stats');
   return res.json();
 }
 
-/**
- * Health check.
- */
 export async function healthCheck() {
   const res = await fetch(`${API_BASE}/health`);
   if (!res.ok) throw new Error('Backend unreachable');

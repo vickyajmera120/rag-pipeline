@@ -155,6 +155,42 @@ class VectorStore:
         logger.info(f"Removed {removed} chunks for {file_path}")
         return removed
 
+    def update_file_paths(self, old_path: str, new_path: str) -> int:
+        """Update file paths in chunk metadata when files/folders are moved.
+
+        Matches chunks by exact path or path prefix (for folder moves).
+
+        Args:
+            old_path: The original file/folder path.
+            new_path: The new file/folder path.
+
+        Returns:
+            Number of chunks updated.
+        """
+        self.initialize()
+
+        updated = 0
+        # Normalize separators
+        old_norm = old_path.replace("\\", "/")
+        new_norm = new_path.replace("\\", "/")
+
+        for chunk in self.chunks:
+            chunk_path = chunk.get("file_path", "").replace("\\", "/")
+            if chunk_path == old_norm:
+                # Exact file match
+                chunk["file_path"] = new_path
+                updated += 1
+            elif chunk_path.startswith(old_norm + "/"):
+                # Folder prefix match (for folder moves)
+                chunk["file_path"] = new_path + chunk_path[len(old_norm):]
+                updated += 1
+
+        if updated > 0:
+            self._save()
+            logger.info(f"Updated {updated} chunk paths: {old_path} → {new_path}")
+
+        return updated
+
     def get_stats(self) -> dict:
         """Get index statistics."""
         self.initialize()
