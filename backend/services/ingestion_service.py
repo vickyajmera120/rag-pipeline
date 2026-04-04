@@ -44,6 +44,112 @@ class IngestionService:
         # Track ingested files
         self._files: dict[str, IngestedFile] = {}
         self._processing = False
+        self._lock = asyncio.Lock()
+
+        # Rebuild tracking state from existing vector store metadata
+        self._sync_from_store()
+
+    def _sync_from_store(self):
+        """Rebuild _files tracking map from the vector store metadata.
+
+        Two-pass approach:
+        1. Chunks that already carry a file_id (newly indexed data) are grouped
+           by that ID.
+        2. Chunks without a file_id (legacy data) are grouped by file_path and
+           assigned a deterministic ID derived from the path hash. The file_id
+           is also backfilled into the chunk metadata so that future operations
+           (scoped search, deletion) work correctly.
+        """
+        try:
+            chunks = self.vector_store.chunks
+            if not chunks:
+                return
+
+            # Track which file_paths already have a file_id assigned
+            path_to_file_id: dict[str, str] = {}
+            needs_save = False
+
+            # Pass 1: Process chunks that already have file_id
+            for chunk in chunks:
+                file_path = chunk.get("file_path")
+                if not file_path:
+                    continue
+
+                file_id = chunk.get("file_id")
+                if not file_id:
+                    continue
+
+                path_to_file_id[file_path] = file_id
+
+                if file_id not in self._files:
+                    path = Path(file_path)
+                    try:
+                        size = path.stat().st_size if path.exists() else 0
+                    except Exception:
+                        size = 0
+                    self._files[file_id] = IngestedFile(
+                        file_id=file_id,
+                        file_name=chunk.get("file_name", path.name),
+                        file_path=file_path,
+                        file_size=size,
+                        document_type=chunk.get("document_type", ""),
+                        status="indexed",
+                        chunk_count=0,
+                    )
+
+                self._files[file_id].chunk_count += 1
+
+            # Pass 2: Backfill chunks that are missing file_id (legacy data)
+            for chunk in chunks:
+                file_path = chunk.get("file_path")
+                if not file_path or chunk.get("file_id"):
+                    continue
+
+                # Reuse an existing ID for this path if we already assigned one,
+                # otherwise generate a deterministic one from the path
+                if file_path in path_to_file_id:
+                    file_id = path_to_file_id[file_path]
+                else:
+                    import hashlib
+                    file_id = hashlib.sha256(file_path.encode()).hexdigest()[:16]
+                    path_to_file_id[file_path] = file_id
+
+                # Backfill the metadata so scoped search works
+                chunk["file_id"] = file_id
+                needs_save = True
+
+                if file_id not in self._files:
+                    path = Path(file_path)
+                    try:
+                        size = path.stat().st_size if path.exists() else 0
+                    except Exception:
+                        size = 0
+                    self._files[file_id] = IngestedFile(
+                        file_id=file_id,
+                        file_name=chunk.get("file_name", path.name),
+                        file_path=file_path,
+                        file_size=size,
+                        document_type=chunk.get("document_type", ""),
+                        status="indexed",
+                        chunk_count=0,
+                    )
+
+                self._files[file_id].chunk_count += 1
+
+            # Persist backfilled file_ids so they survive restarts
+            if needs_save:
+                self.vector_store._save()
+                # Also backfill BM25 metadata
+                for meta in self.bm25_store.metadata:
+                    fp = meta.get("file_path")
+                    if fp and not meta.get("file_id") and fp in path_to_file_id:
+                        meta["file_id"] = path_to_file_id[fp]
+                self.bm25_store._save()
+                logger.info("Backfilled file_id into legacy chunk metadata.")
+
+            logger.info(f"Synchronized IngestionService with {len(self._files)} files from store.")
+        except Exception as e:
+            logger.error(f"Failed to sync IngestionService from store: {e}")
 
     @property
     def is_processing(self) -> bool:
@@ -95,11 +201,12 @@ class IngestionService:
         if not files:
             return
 
-        self._processing = True
-        try:
-            await self._process_files(files)
-        finally:
-            self._processing = False
+        async with self._lock:
+            self._processing = True
+            try:
+                await self._process_files(files)
+            finally:
+                self._processing = False
 
     async def ingest_files(self, file_paths: list[str]) -> list[IngestedFile]:
         """Ingest multiple files through the full pipeline (sync registration).
@@ -438,6 +545,10 @@ class IngestionService:
                 ingested.status = "chunking"
                 chunks = self.chunker.chunk_document(parsed)
                 ingested.chunk_count = len(chunks)
+
+                # Set file_id on all chunks
+                for chunk in chunks:
+                    chunk.file_id = ingested.file_id
 
                 all_chunks.extend(chunks)
                 logger.info(

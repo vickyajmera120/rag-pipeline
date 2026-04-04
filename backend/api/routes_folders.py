@@ -365,3 +365,65 @@ def sync_zip_metadata(namelist: list[str], extract_dir: Path, parent_id: Optiona
 
         _write_folders(data)
     return path_to_id
+
+
+def sync_folder_upload_metadata(
+    relative_paths: list[str],
+    base_dir: Path,
+    parent_id: Optional[str] = None,
+) -> Dict[str, str]:
+    """Sync folder structure from a browser folder upload into folders.json.
+
+    When the browser uploads a folder, each file has a webkitRelativePath like
+    'myFolder/sub/file.txt'. This function creates virtual folders for each
+    directory level and returns a mapping of absolute disk paths to folder IDs.
+
+    Args:
+        relative_paths: List of relative file paths (from webkitRelativePath).
+        base_dir: The base directory where files are saved on disk.
+        parent_id: The virtual folder ID of the current folder context.
+
+    Returns:
+        Mapping of absolute_disk_path (as_posix) -> virtual_folder_id.
+    """
+    with FileLock(str(FOLDER_LOCK_FILE), timeout=LOCK_TIMEOUT):
+        data = _read_folders()
+        folders = data.get("folders", [])
+
+        path_to_id = {}
+
+        for rel_path in relative_paths:
+            parts = [p for p in rel_path.replace("\\", "/").split("/") if p]
+            if not parts:
+                continue
+
+            # The last part is the filename, everything before is directories
+            dir_parts = parts[:-1]
+            if not dir_parts:
+                # File is at the root level of the upload — map to base_dir
+                base_key = base_dir.absolute().as_posix()
+                if base_key not in path_to_id and parent_id:
+                    path_to_id[base_key] = parent_id
+                continue
+
+            curr_parent = parent_id
+            curr_disk_path = base_dir
+
+            for part in dir_parts:
+                curr_disk_path = curr_disk_path / part
+
+                folder = next(
+                    (f for f in folders if f["name"] == part and f.get("parentId") == curr_parent),
+                    None,
+                )
+                if not folder:
+                    new_id = _generate_folder_id()
+                    folder = {"id": new_id, "name": part, "parentId": curr_parent}
+                    folders.append(folder)
+
+                curr_parent = folder["id"]
+                path_to_id[curr_disk_path.absolute().as_posix()] = curr_parent
+
+        _write_folders(data)
+    return path_to_id
+

@@ -27,6 +27,7 @@ class DocumentChunk:
     total_chunks: int = 0
     token_count: int = 0
     content_hash: str = ""  # for deduplication
+    file_id: str = ""  # ID of the IngestedFile tracking object
 
     def to_dict(self) -> dict:
         return {
@@ -40,6 +41,7 @@ class DocumentChunk:
             "total_chunks": self.total_chunks,
             "token_count": self.token_count,
             "content_hash": self.content_hash,
+            "file_id": self.file_id,
         }
 
     @classmethod

@@ -14,8 +14,9 @@ export default function SourceCard({ source }) {
     }
   };
 
-  const scorePercent = source.relevance_score
-    ? Math.round(Math.max(0, Math.min(1, (source.relevance_score + 5) / 10)) * 100)
+  // Cross-encoder outputs raw logits; sigmoid converts to probability
+  const scorePercent = source.relevance_score != null
+    ? Math.round(1 / (1 + Math.exp(-source.relevance_score)) * 100)
     : null;
 
   return (

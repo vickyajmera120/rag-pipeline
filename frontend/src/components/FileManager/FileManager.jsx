@@ -367,7 +367,8 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
     doUpload(
       (files, folderPath, onProgress) => uploadFolderWithProgress(files, folderPath, onProgress),
       selected,
-      'folder'
+      'folder',
+      true  // treat like ZIP — backend handles folder structure & assignments
     );
   };
 
