@@ -101,12 +101,26 @@ async def upload_files(
     # Register files immediately so they appear in status as pending
     ingested_files = ingestion_service.register_files(saved_paths)
 
+    # Prepare response with file IDs
+    final_file_infos = []
+    path_to_info = {info["name"]: info for info in file_infos}
+    
+    for f in ingested_files:
+        name = Path(f.file_path).name
+        info = path_to_info.get(name, {})
+        final_file_infos.append({
+            "file_id": f.file_id,
+            "name": name,
+            "size": info.get("size", 0),
+            "type": info.get("type", ""),
+        })
+
     # Run ingestion in background
     background_tasks.add_task(_run_ingestion_files, ingestion_service, ingested_files)
 
     return UploadResponse(
         message=f"Processing {len(saved_paths)} file(s)",
-        files=file_infos,
+        files=final_file_infos,
         total_files=len(saved_paths),
     )
 

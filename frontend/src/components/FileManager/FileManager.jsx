@@ -335,19 +335,21 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
   };
 
   const handleFileUpload = (e) => {
-    const selected = e.target.files;
+    const selected = Array.from(e.target.files);
+    e.target.value = '';
+    setShowUploadMenu(false);
     if (!selected.length) return;
     doUpload(
       (files, folderPath, onProgress) => uploadFilesWithProgress(files, folderPath, onProgress),
       selected,
       `${selected.length} file(s)`
     );
-    e.target.value = '';
-    setShowUploadMenu(false);
   };
 
   const handleZipUpload = (e) => {
     const file = e.target.files[0];
+    e.target.value = '';
+    setShowUploadMenu(false);
     if (!file) return;
     doUpload(
       (files, folderPath, onProgress) => uploadZipWithProgress(file, folderPath, onProgress),
@@ -355,20 +357,18 @@ export default function FileManager({ onScopeChange, onSwitchToChat }) {
       file.name,
       true  // isZip = true
     );
-    e.target.value = '';
-    setShowUploadMenu(false);
   };
 
   const handleFolderUpload = (e) => {
-    const selected = e.target.files;
+    const selected = Array.from(e.target.files);
+    e.target.value = '';
+    setShowUploadMenu(false);
     if (!selected.length) return;
     doUpload(
       (files, folderPath, onProgress) => uploadFolderWithProgress(files, folderPath, onProgress),
       selected,
       'folder'
     );
-    e.target.value = '';
-    setShowUploadMenu(false);
   };
 
   const handleDropUpload = async (e) => {
